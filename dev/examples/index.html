@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · PSFKernels.jl</title><link rel="canonical" href="https://juliaastro.github.io/PSFKernels.jl/examples/"/><link href="https://fonts.googleapis.com/css?family=Lato|Roboto+Mono" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.0/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.0/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.0/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.11.1/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit">PSFKernels.jl</span></div><form class="docs-search" action="../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../api/">API/Reference</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#Fitting-a-PSF"><span>Fitting a PSF</span></a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/JuliaAstro/PSFKernels.jl/blob/master/docs/src/examples.md#L" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><h2 id="Fitting-a-PSF"><a class="docs-heading-anchor" href="#Fitting-a-PSF">Fitting a PSF</a><a id="Fitting-a-PSF-1"></a><a class="docs-heading-anchor-permalink" href="#Fitting-a-PSF" title="Permalink"></a></h2><p>Here is a brief example which shows how to construct a loss function for fitting a <code>PSFKernel</code> to some data.</p><pre><code class="language-">using PSFKernels: Gaussian
+using HCIDatasets: BetaPictoris
+using Plots
+
+# convenience function for plotting
+function imshow(data; kwargs...)
+    xlim = extrema(axes(data, 2))
+    ylim = extrema(axes(data, 1))
+    heatmap(data; xlim=xlim, ylim=ylim, aspect_ratio=1, kwargs...)
+end
+
+# get a PSF from HCIDatasets.jl;
+# you may be prompted to download the file
+psf = BetaPictoris[:psf]
+
+imshow(psf)</code></pre><pre><code class="language-"># generative model
+function kernel(X::AbstractVector{T}) where T
+    position = X[1:2] # x, y position
+    fwhm     = X[3:4] # fwhm_x, fwhm_y
+    return Gaussian{T}(position, fwhm)
+end
+
+# objective function
+function loss(X::AbstractVector{T}, target) where T
+    k = kernel(X)
+    amp = X[5]
+    # cheap way to enforce positivity
+    all(&gt;(0), X) || return T(Inf)
+    # l2-distance loss (χ² loss)
+    return sum(abs2, target .- amp .* k[axes(target)...])
+end
+
+# params are [x, y, fwhm_x, fwhm_y, amp]
+test_params = Float32[20, 20, 5, 5, 1]
+loss(test_params, psf)</code></pre><p>The objective function can then be used with an optimization library like <a href="https://github.com/JuliaOpt/Optim.jl">Optim.jl</a> to find best-fitting parameters</p><pre><code class="language-">using Optim
+
+# Fit our data using test_params as a starting point
+# uses Nelder-Mead optimization
+res = optimize(P -&gt; loss(P, psf), test_params)</code></pre><pre><code class="language-"># utilize automatic differentiation (AD) to enable
+# advanced algorithms, like LBFGS
+res_ad = optimize(P -&gt; loss(P, psf), test_params, LBFGS(); autodiff=:forward)</code></pre><p>we can see which result has the better loss, and then use the generative model to create a kernel that we can use elsewhere</p><pre><code class="language-">best_res = minimum(res) &lt; minimum(res_ad) ? res : res_ad
+best_fit_params = Optim.minimizer(best_res)</code></pre><pre><code class="language-">model = kernel(best_fit_params)
+
+plot(
+    imshow(psf, title=&quot;Data&quot;),
+    plot(model, axes(psf); title=&quot;Model&quot;),
+    cbar=false,
+    ticks=false,
+    layout=2,
+    size=(600, 300)
+)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API/Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Monday 30 November 2020 06:38">Monday 30 November 2020</span>. Using Julia version 1.5.3.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
